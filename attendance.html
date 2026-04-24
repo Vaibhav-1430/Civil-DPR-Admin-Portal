@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Civil DPR Admin | Attendance</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body data-page="attendance">
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <div class="sidebar-header">
+        <h1>Civil DPR</h1>
+        <p>Admin Panel</p>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="dashboard.html" class="nav-link">Dashboard</a>
+        <a href="attendance.html" class="nav-link active">Attendance</a>
+        <a href="dpr.html" class="nav-link">DPR</a>
+        <a href="images.html" class="nav-link">Images</a>
+        <a href="users.html" class="nav-link" data-requires-super="true">Users</a>
+        <button type="button" id="logoutBtn" class="nav-link nav-button danger">Logout</button>
+      </nav>
+    </aside>
+
+    <main class="content-shell">
+      <header class="topbar">
+        <div>
+          <h2>Attendance Management</h2>
+          <p class="muted">Real-time workforce attendance with filter controls.</p>
+        </div>
+        <div class="topbar-actions">
+          <select id="siteSelector" class="input compact" aria-label="Select site"></select>
+          <span id="userBadge" class="role-badge">-</span>
+        </div>
+      </header>
+
+      <section class="panel">
+        <div class="filters-grid">
+          <div>
+            <label for="attendanceDate">Date</label>
+            <input type="date" id="attendanceDate" class="input" />
+          </div>
+          <div>
+            <label for="attendanceRole">Role</label>
+            <select id="attendanceRole" class="input">
+              <option value="">All Roles</option>
+              <option value="worker">Worker</option>
+              <option value="supervisor">Supervisor</option>
+              <option value="engineer">Engineer</option>
+            </select>
+          </div>
+          <div>
+            <label for="attendanceSearch">Search</label>
+            <input type="search" id="attendanceSearch" class="input" placeholder="Search name or role" />
+          </div>
+          <div class="filter-actions">
+            <button id="attendanceExport" class="btn btn-secondary" type="button">Export CSV</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Worker Name</th>
+                <th>Role</th>
+                <th>Check-in</th>
+                <th>Check-out</th>
+                <th>Status</th>
+                <th>Site</th>
+              </tr>
+            </thead>
+            <tbody id="attendanceTableBody"></tbody>
+          </table>
+        </div>
+        <div id="attendanceEmpty" class="empty-state hidden">No attendance records found for the selected filters.</div>
+
+        <footer class="table-footer">
+          <button id="attendancePrev" class="btn btn-secondary" type="button">Previous</button>
+          <span id="attendancePageInfo" class="muted">Page 1</span>
+          <button id="attendanceNext" class="btn btn-secondary" type="button">Next</button>
+        </footer>
+      </section>
+    </main>
+  </div>
+
+  <div id="globalLoader" class="loader-overlay hidden" role="status" aria-live="polite">
+    <div class="spinner"></div>
+    <p>Loading attendance...</p>
+  </div>
+  <div id="toastRoot" class="toast-root" aria-live="polite" aria-atomic="true"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

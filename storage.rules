@@ -1,0 +1,66 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && userDoc().data.role == 'super_admin';
+    }
+
+    function isBlocked() {
+      return userDoc().data.isBlocked == true;
+    }
+
+    function configDoc() {
+      return firestore.get(/databases/(default)/documents/global_config/app);
+    }
+
+    function appEnabled() {
+      return !firestore.exists(/databases/(default)/documents/global_config/app) ||
+        configDoc().data.appEnabled != false;
+    }
+
+    function subscriptionActive() {
+      return !firestore.exists(/databases/(default)/documents/global_config/app) ||
+        (configDoc().data.subscriptionStatus == 'active' &&
+         (configDoc().data.subscriptionExpiresAt == null ||
+          request.time < configDoc().data.subscriptionExpiresAt));
+    }
+
+    function hasAccess() {
+      return isSignedIn() && !isBlocked() && appEnabled() && subscriptionActive();
+    }
+
+    function isAdminLike() {
+      return isSuperAdmin() || (isSignedIn() && userDoc().data.role == 'admin');
+    }
+
+    function isMyEngineer(uid) {
+      return firestore.exists(/databases/(default)/documents/users/$(uid)) &&
+        firestore.get(/databases/(default)/documents/users/$(uid)).data.supervisorId == request.auth.uid &&
+        firestore.get(/databases/(default)/documents/users/$(uid)).data.role == 'site_engineer';
+    }
+
+    match /attendance_photos/{userId}/{allPaths=**} {
+      allow read: if isAdminLike() ||
+        (hasAccess() && (request.auth.uid == userId || isMyEngineer(userId)));
+      allow write: if hasAccess() && request.auth.uid == userId;
+    }
+    match /attendance_reports/{allPaths=**} {
+      allow read: if hasAccess() && isAdminLike();
+      allow write: if false;
+    }
+    match /dpr_photos/{allPaths=**} {
+      allow read, write: if isSuperAdmin() || hasAccess();
+    }
+    match /profile_photos/{allPaths=**} {
+      allow read, write: if isSuperAdmin() || hasAccess();
+    }
+  }
+}

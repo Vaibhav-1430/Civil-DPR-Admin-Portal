@@ -1,0 +1,334 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function userDoc() {
+      return get(userPath(request.auth.uid));
+    }
+
+    function role() {
+      return userDoc().data.role;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && role() == 'super_admin';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && role() == 'admin';
+    }
+
+    function isAdminLike() {
+      return isSuperAdmin() || isAdmin();
+    }
+
+    function isSupervisor() {
+      return isSignedIn() && role() == 'supervisor';
+    }
+
+    function isEngineer() {
+      return isSignedIn() && role() == 'site_engineer';
+    }
+
+    function isCoreRole(value) {
+      return value == 'admin' ||
+        value == 'supervisor' ||
+        value == 'site_engineer' ||
+        value == 'super_admin';
+    }
+
+    function isBlocked() {
+      return userDoc().data.isBlocked == true;
+    }
+
+    function assignedProjects() {
+      return userDoc().data.assignedProjects != null
+        ? userDoc().data.assignedProjects
+        : [];
+    }
+
+    function projectAssigned(projectId) {
+      return projectId in assignedProjects() ||
+        userDoc().data.projectId == projectId ||
+        (
+          exists(/databases/$(database)/documents/projects/$(projectId)) &&
+          get(/databases/$(database)/documents/projects/$(projectId)).data.assignedUsers != null &&
+          request.auth.uid in get(/databases/$(database)/documents/projects/$(projectId)).data.assignedUsers
+        );
+    }
+
+    function isMyEngineer(uid) {
+      return exists(userPath(uid)) &&
+        get(userPath(uid)).data.supervisorId == request.auth.uid &&
+        get(userPath(uid)).data.role == 'site_engineer';
+    }
+
+    function configPath() {
+      return /databases/$(database)/documents/global_config/app;
+    }
+
+    function configExists() {
+      return exists(configPath());
+    }
+
+    function configDoc() {
+      return get(configPath());
+    }
+
+    function appEnabled() {
+      return !configExists() || configDoc().data.appEnabled != false;
+    }
+
+    function subscriptionActive() {
+      return !configExists() ||
+        (configDoc().data.subscriptionStatus == 'active' &&
+         (configDoc().data.subscriptionExpiresAt == null ||
+          request.time < configDoc().data.subscriptionExpiresAt));
+    }
+
+    function hasActiveAccess() {
+      return isSignedIn() && !isBlocked() && appEnabled() && subscriptionActive();
+    }
+
+    function setupPending() {
+      return !configExists() || configDoc().data.isSetupDone != true;
+    }
+
+    match /global_config/{docId} {
+      allow read: if true;
+      allow create: if setupPending() && isSignedIn() &&
+        request.resource.data.isSetupDone == true;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /admin_codes/{codeId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    match /users/{userId} {
+      function isSelf() {
+        return isSignedIn() && request.auth.uid == userId;
+      }
+
+      function selfCreateAllowed() {
+        return isSelf() &&
+          request.resource.data.uid == userId &&
+          (request.resource.data.role == 'supervisor' ||
+           request.resource.data.role == 'site_engineer') &&
+          request.resource.data.isBlocked == false &&
+          request.resource.data.isActive == true;
+      }
+
+      function setupSuperAdminCreateAllowed() {
+        return setupPending() &&
+          isSelf() &&
+          request.resource.data.uid == userId &&
+          request.resource.data.role == 'super_admin' &&
+          request.resource.data.isBlocked == false &&
+          request.resource.data.isActive == true;
+      }
+
+      allow read: if hasActiveAccess() &&
+        (isAdminLike() ||
+         isSelf() ||
+         (isSupervisor() && resource.data.supervisorId == request.auth.uid));
+
+      allow create: if selfCreateAllowed() || setupSuperAdminCreateAllowed();
+
+      allow update: if isSuperAdmin() ||
+        (isAdmin() && resource.data.role != 'super_admin' &&
+         request.resource.data.role != 'super_admin') ||
+        (isSelf() &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.isBlocked == resource.data.isBlocked);
+
+      allow delete: if isSuperAdmin();
+    }
+
+    match /projects/{projectId} {
+      allow read: if hasActiveAccess() && (isAdminLike() || projectAssigned(projectId));
+      allow write: if hasActiveAccess() && isAdminLike();
+    }
+
+    match /attendance/{attendanceId} {
+      function isOwnAttendanceId() {
+        return isSignedIn() &&
+          attendanceId.matches('^' + request.auth.uid + '_[0-9]{8}$');
+      }
+
+      function attendanceFieldsValid() {
+        return request.resource.data.keys().hasAll([
+          'userId',
+          'name',
+          'role',
+          'projectId',
+          'date',
+          'timestamp',
+          'location',
+          'imageUrl',
+          'faceVerified',
+          'status'
+        ]) &&
+        request.resource.data.userId is string &&
+        request.resource.data.name is string &&
+        request.resource.data.role is string &&
+        isCoreRole(request.resource.data.role) &&
+        request.resource.data.projectId is string &&
+        request.resource.data.date is timestamp &&
+        request.resource.data.timestamp is timestamp &&
+        request.resource.data.location is map &&
+        request.resource.data.location.latitude is number &&
+        request.resource.data.location.longitude is number &&
+        request.resource.data.imageUrl is string &&
+        request.resource.data.faceVerified is bool &&
+        (
+          !('recordStatus' in request.resource.data) ||
+          request.resource.data.recordStatus == 'active' ||
+          request.resource.data.recordStatus == 'reset'
+        );
+      }
+
+      function resetMetadataClearedForUserWrite() {
+        return (
+          !('recordStatus' in request.resource.data) ||
+          request.resource.data.recordStatus == 'active'
+        ) &&
+        (!('resetBy' in request.resource.data) || request.resource.data.resetBy == null) &&
+        (!('resetAt' in request.resource.data) || request.resource.data.resetAt == null) &&
+        (!('resetBatchId' in request.resource.data) || request.resource.data.resetBatchId == null);
+      }
+
+      function attendanceWriteAllowed() {
+        return hasActiveAccess() &&
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.role == role() &&
+          request.resource.data.name is string &&
+          request.resource.data.name.size() > 0 &&
+          projectAssigned(request.resource.data.projectId) &&
+          attendanceFieldsValid() &&
+          resetMetadataClearedForUserWrite();
+      }
+
+      function adminResetWriteAllowed() {
+        return hasActiveAccess() &&
+          isAdminLike() &&
+          request.resource.data.userId == resource.data.userId &&
+          request.resource.data.name == resource.data.name &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.projectId == resource.data.projectId &&
+          request.resource.data.date == resource.data.date &&
+          request.resource.data.timestamp == resource.data.timestamp &&
+          request.resource.data.location == resource.data.location &&
+          request.resource.data.imageUrl == resource.data.imageUrl &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            'status',
+            'recordStatus',
+            'resetBy',
+            'resetAt',
+            'resetBatchId',
+            'previousStatus',
+            'updatedAt'
+          ]);
+      }
+
+      allow read: if hasActiveAccess() && (
+        isAdminLike() ||
+        // Allow direct reads of own deterministic daily doc ID even
+        // before the document exists (first attendance of the day).
+        isOwnAttendanceId() ||
+        // Every signed-in user can read their own attendance records.
+        (resource.data.userId == request.auth.uid) ||
+        // Supervisors can read attendance for assigned projects and
+        // engineers that explicitly report to them.
+        (isSupervisor() && (
+          projectAssigned(resource.data.projectId) ||
+          isMyEngineer(resource.data.userId)
+        ))
+      );
+
+      allow create: if attendanceWriteAllowed();
+
+      allow update: if attendanceWriteAllowed() &&
+        resource.data.userId == request.auth.uid ||
+        adminResetWriteAllowed();
+
+      allow delete: if hasActiveAccess() && isAdminLike();
+    }
+
+    match /attendance_resets/{resetId} {
+      allow read: if hasActiveAccess() && isAdminLike();
+      allow create, update: if hasActiveAccess() && isAdminLike();
+      allow delete: if false;
+    }
+
+    match /dprs/{dprId} {
+      allow read: if hasActiveAccess() && (
+        isAdminLike() ||
+        (isSupervisor() && (
+          projectAssigned(resource.data.projectId) ||
+          isMyEngineer(resource.data.uploadedById)
+        )) ||
+        (isEngineer() && resource.data.uploadedById == request.auth.uid &&
+         projectAssigned(resource.data.projectId))
+      );
+
+      allow create: if hasActiveAccess() && (
+        isAdminLike() ||
+        ((isSupervisor() || isEngineer()) &&
+         request.resource.data.uploadedById == request.auth.uid &&
+         projectAssigned(request.resource.data.projectId))
+      );
+
+      allow update: if hasActiveAccess() && (
+        isAdminLike() ||
+        ((isSupervisor() || isEngineer()) &&
+         resource.data.uploadedById == request.auth.uid &&
+         request.resource.data.uploadedById == request.auth.uid &&
+         projectAssigned(resource.data.projectId))
+      );
+
+      allow delete: if hasActiveAccess() && isAdminLike();
+    }
+
+    match /leave_requests/{leaveId} {
+      allow read: if hasActiveAccess() && (
+        isAdminLike() ||
+        (isSupervisor() && projectAssigned(resource.data.projectId)) ||
+        (resource.data.userId == request.auth.uid)
+      );
+
+      allow create: if hasActiveAccess() &&
+        (isSupervisor() || isEngineer()) &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        projectAssigned(request.resource.data.projectId);
+
+      allow update: if hasActiveAccess() && isAdminLike();
+      allow delete: if hasActiveAccess() && isAdminLike();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if hasActiveAccess() &&
+        (isAdminLike() || resource.data.userId == request.auth.uid);
+      allow create, update, delete: if hasActiveAccess() && isAdminLike();
+    }
+
+    match /attendance_report_exports/{docId} {
+      allow read: if hasActiveAccess() && isAdminLike();
+      allow write: if false;
+    }
+
+    match /analytics/{docId} {
+      allow read: if hasActiveAccess() && isAdminLike();
+      allow write: if hasActiveAccess() && isAdminLike();
+    }
+  }
+}
